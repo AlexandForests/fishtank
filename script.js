@@ -417,6 +417,35 @@
     else start();
   });
 
-  spawn();
-  if (!reduceMotion) start();
+  // Guards against a hidden/backgrounded load (a real condition for OBS's CEF offscreen
+  // rendering), where window.innerWidth/innerHeight read 0 at script time. Spawning against
+  // that degenerate size, then rescaling once the real size arrives, would multiply every
+  // entity's position by a huge factor and fling the whole scene off-screen.
+  const MIN_VIEWPORT = 10;
+  function hasRealViewport() {
+    return window.innerWidth >= MIN_VIEWPORT && window.innerHeight >= MIN_VIEWPORT;
+  }
+
+  function boot() {
+    W = Math.max(window.innerWidth, 1);
+    H = Math.max(window.innerHeight, 1);
+    spawn();
+    if (!reduceMotion) start();
+  }
+
+  if (hasRealViewport()) {
+    boot();
+  } else {
+    let pollId = 0;
+    function tryBoot() {
+      if (!hasRealViewport()) return;
+      window.removeEventListener("resize", tryBoot);
+      document.removeEventListener("visibilitychange", tryBoot);
+      clearInterval(pollId);
+      boot();
+    }
+    window.addEventListener("resize", tryBoot, { passive: true });
+    document.addEventListener("visibilitychange", tryBoot);
+    pollId = setInterval(tryBoot, 250);
+  }
 })();
