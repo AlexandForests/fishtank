@@ -1,241 +1,401 @@
 (() => {
   const tank = document.getElementById("tank");
+  const layer = document.getElementById("life-layer");
+  const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
 
-  const prefersReduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
-  if (prefersReduced) return;
+  if (!tank || !layer) return;
 
-  const fishEmojis = ["🐟","🐠","🐡","🦈","🐬","🐳","🦭","🦀","🦞","🦐","🐙","🪼","🦑","🐠"];
-  const bubbleEmojis = ["🫧","🫧","🫧","🫧","🫧","🫧","🫧","🫧","🫧","🫧"];
+  const SCENE = Object.freeze({
+    seed: 0xa0f15a,
+    creatures: [
+      { mode: "fish", count: 4, yMin: 0.14, yMax: 0.62, width: [138, 190], speed: [9, 20], opacity: [0.42, 0.62], blur: [0, 0], sway: [8, 20], z: 2, aspect: 0.58 },
+      { mode: "fish", count: 3, yMin: 0.26, yMax: 0.82, width: [190, 260], speed: [15, 28], opacity: [0.62, 0.86], blur: [0, 0], sway: [12, 28], z: 5, aspect: 0.58 },
+      { mode: "jelly", count: 4, yMin: 0.16, yMax: 0.72, width: [118, 168], speed: [5, 13], opacity: [0.52, 0.78], blur: [0, 0], sway: [16, 34], z: 4, aspect: 1.18 },
+      { mode: "ray", count: 3, yMin: 0.34, yMax: 0.86, width: [170, 250], speed: [10, 23], opacity: [0.52, 0.78], blur: [0, 0], sway: [10, 24], z: 3, aspect: 0.66 },
+    ],
+    bubbleCount: 34,
+  });
 
-  // Tunables
-  const FISH_COUNT = 32;
-  const BUBBLE_COUNT = 26;
+  // cheap smooth (value) noise - gives the shimmer/drift texture
+  function hash(x, y) { const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return n - Math.floor(n); }
+  function vnoise(x, y) {
+    const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi;
+    const u = xf*xf*(3-2*xf), v = yf*yf*(3-2*yf);
+    const a = hash(xi,yi), b = hash(xi+1,yi), c = hash(xi,yi+1), d = hash(xi+1,yi+1);
+    return a*(1-u)*(1-v) + b*u*(1-v) + c*(1-u)*v + d*u*v;
+  }
+  const clamp = (v,a,b) => v < a ? a : v > b ? b : v;
+  const smoothstep = (e0,e1,x) => { const t = clamp((x-e0)/(e1-e0||1e-6),0,1); return t*t*(3-2*t); };
 
-  // Cursor/touch repulsion
-  const repelRadius = 140;       // px
-  const repelStrength = 3.85;    // acceleration multiplier
-  const cursorFollow = 0.18;     // how quickly the "pointer" target updates
+  // FISH - faces left, tail on the right swishes most. Returns density 0..1.
+  function fishField(x, y, t) {
+    const swish = Math.sin(x * 3.0 - t * 4.0) * 0.10 * clamp((x + 0.4) / 1.2, 0, 1);
+    const yw = y - swish;                              // warp body by the swim wave
+    const bx = x / 0.62, by = yw / 0.30;
+    const body = 1.0 - (bx*bx + by*by);               // >0 inside the body ellipse
+    const tx = (x - 0.5) / 0.34;                      // 0..1 across the tail fin
+    const spread = Math.abs(yw) / (0.06 + tx * 0.34);
+    const tail = (x > 0.48) ? (1.0 - Math.max(tx, spread)) : -1;
+    let d = smoothstep(0.0, 0.30, Math.max(body, tail)); // feathered edge -> density
+    if (d <= 0) return 0;
+    const ex = x + 0.40, ey = yw + 0.02;              // punch an eye near the head
+    if (ex*ex + ey*ey < 0.004) d = 0;
+    const tex = 0.55 + 0.5 * vnoise(x*7 + t*0.6, y*7 - t*0.4);
+    return clamp(d * tex, 0, 1);
+  }
 
-  // Physics
-  const maxSpeed = 1.8;
-  const drift = 0.015;           // small random drift
-  const damping = 0.985;
+  // JELLYFISH - pulsing bell + drifting tentacles. Same return contract.
+  function jellyField(x, y, t) {
+    const pulse = 1.0 + 0.14 * Math.sin(t * 2.2);
+    const cy = (y + 0.28), rx = 0.55 * pulse, ry = 0.44 * pulse;
+    const bell = 1.0 - ((x/rx)*(x/rx) + (cy/ry)*(cy/ry));
+    let dome = (cy < 0.16) ? smoothstep(0.0, 0.30, bell) : 0;     // top hemisphere only
+    let tent = 0;
+    if (y > -0.06) {
+      const strands = 7;
+      for (let i = 0; i < strands; i++) {
+        const sx  = (i / (strands - 1) - 0.5) * 0.78;
+        const wob = Math.sin(y * 6.0 + t * 3.0 + i) * (0.04 + y * 0.06);
+        const dx  = Math.abs(x - (sx + wob));
+        const fall = clamp(1.0 - (y + 0.06) / 0.9, 0, 1);          // fade downward
+        tent = Math.max(tent, smoothstep(0.045, 0.0, dx) * fall * 0.85);
+      }
+    }
+    let d = Math.max(dome, tent);
+    if (d <= 0) return 0;
+    const tex = 0.5 + 0.55 * vnoise(x*7 - t*0.3, y*7 + t*0.5);
+    return clamp(d * tex, 0, 1);
+  }
 
-  // Screen bounds (updated on resize)
-  let W = window.innerWidth;
-  let H = window.innerHeight;
+  // RAY - additive third field, using the same density contract as fish/jelly.
+  function rayField(x, y, t) {
+    const flap = Math.sin(t * 2.1 + Math.abs(x) * 3.0) * 0.075 * clamp(1.0 - Math.abs(x) / 0.96, 0, 1);
+    const yw = y - flap;
+    const wingThickness = 0.05 + 0.27 * clamp(1.0 - Math.abs(x) / 0.96, 0, 1);
+    const wings = 1.0 - Math.max(Math.abs(x) / 0.96, Math.abs(yw) / wingThickness);
+    const head = 1.0 - (((x + 0.36) / 0.30) * ((x + 0.36) / 0.30) + (yw / 0.20) * (yw / 0.20));
+    const tailWave = Math.sin(x * 10.0 + t * 2.8) * 0.018;
+    const tail = (x > 0.20) ? smoothstep(0.035, 0.0, Math.abs(yw - tailWave)) * clamp(1.0 - (x - 0.20) / 0.78, 0, 1) : 0;
+    let d = smoothstep(0.0, 0.24, Math.max(Math.max(wings, head), tail * 0.7));
+    if (d <= 0) return 0;
+    const tex = 0.48 + 0.55 * vnoise(x*6 - t*0.35, y*6 + t*0.25);
+    return clamp(d * tex, 0, 1);
+  }
 
-  // "Pointer" position (mouse or touch), smoothed
-  let pointer = { x: W * 0.5, y: H * 0.5 };
-  let pointerTarget = { x: pointer.x, y: pointer.y };
+  const RAMP = " .:-=+*#%@";          // index 0 = empty space, last = densest
 
-  function rand(min, max) { return Math.random() * (max - min) + min; }
-  function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+  const PALETTES = Object.freeze({
+    fish: { hue: 188, swing: 16, sat: 72, light: 62, glow: "rgba(93, 230, 255, 0.7)" },
+    jelly: { hue: 252, swing: 22, sat: 76, light: 66, glow: "rgba(176, 156, 255, 0.72)" },
+    ray: { hue: 166, swing: 18, sat: 68, light: 58, glow: "rgba(92, 255, 218, 0.64)" },
+  });
 
-  class Entity {
-    constructor({ emoji, className, x, y, vx, vy, size }) {
-      this.x = x; this.y = y;
-      this.vx = vx; this.vy = vy;
-      this.size = size;
+  function colorFor(d, ny, t, mode) {
+    const p = PALETTES[mode] || PALETTES.fish;
+    const hue = p.hue + p.swing * Math.sin(t * 0.32 + ny * 2.0 + d * 1.7);
+    const sat = p.sat + d * 18;
+    const light = p.light + d * 24;
+    return `hsl(${hue|0} ${sat|0}% ${Math.min(94, light)|0}%)`;
+  }
 
-      this.el = document.createElement("div");
-      this.el.className = `entity ${className}`;
-      this.el.textContent = emoji;
-      this.el.style.fontSize = `${size}px`;
-      tank.appendChild(this.el);
+  function glowFor(mode) {
+    return (PALETTES[mode] || PALETTES.fish).glow;
+  }
+
+  const FIELD_BY_MODE = Object.freeze({
+    fish: fishField,
+    jelly: jellyField,
+    ray: rayField,
+  });
+
+  let W = Math.max(window.innerWidth, 1);
+  let H = Math.max(window.innerHeight, 1);
+  let rng = mulberry32(SCENE.seed);
+  const entities = [];
+
+  function mulberry32(seed) {
+    return function next() {
+      let t = seed += 0x6D2B79F5;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function rand(min, max) {
+    return rng() * (max - min) + min;
+  }
+
+  function setCreatureVars(el, width, height, opacity, blur) {
+    el.style.setProperty("--entity-width", `${width}px`);
+    el.style.setProperty("--entity-height", `${height}px`);
+    el.style.setProperty("--entity-opacity", opacity.toFixed(3));
+    el.style.setProperty("--entity-blur", `${blur.toFixed(2)}px`);
+  }
+
+  function setBubbleVars(el, size, opacity, blur) {
+    el.style.setProperty("--entity-size", `${size}px`);
+    el.style.setProperty("--entity-opacity", opacity.toFixed(3));
+    el.style.setProperty("--entity-blur", `${blur.toFixed(2)}px`);
+  }
+
+  class AsciiRenderer {
+    constructor(canvas, mode) {
+      this.canvas = canvas;
+      this.ctx = canvas.getContext("2d");
+      this.mode = mode;
+      this.cols = 0;
+      this.rows = 0;
+      this.cellW = 0;
+      this.cellH = 0;
+      this.aspect = 1;
     }
 
-    render(flip = 1) {
-      // flip = 1 normal, -1 mirrored for direction
-      this.el.style.transform = `translate(${this.x}px, ${this.y}px) scaleX(${flip})`;
+    resize() {
+      const dpr = Math.min(devicePixelRatio || 1, 2);
+      const r = this.canvas.getBoundingClientRect();
+      if (!r.width || !r.height || !this.ctx) return;
+      this.canvas.width  = Math.round(r.width  * dpr);
+      this.canvas.height = Math.round(r.height * dpr);
+      this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const cell = 6.4;                              // target px per character
+      this.cols = Math.max(1, Math.floor(r.width  / cell));
+      this.rows = Math.max(1, Math.floor(r.height / (cell * 1.4)));
+      this.cellW = r.width / this.cols; this.cellH = r.height / this.rows;
+      this.aspect = r.height / r.width;              // keep the creature un-stretched
+      this.ctx.font = `${Math.round(this.cellH * 0.95)}px ui-monospace, "SF Mono", Menlo, Consolas, monospace`;
+      this.ctx.textBaseline = "top";
+    }
+
+    render(t) {
+      if (!this.ctx) return;
+      const field = FIELD_BY_MODE[this.mode] || fishField;
+
+      if (this.mode === "jelly") {
+        this.ctx.globalCompositeOperation = "destination-out";
+        this.ctx.fillStyle = "rgba(0,0,0,0.18)";
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.globalCompositeOperation = "source-over";
+      } else {
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+      }
+
+      const cells = [];
+
+      for (let r = 0; r < this.rows; r++) {
+        const ny = ((r + 0.5) / this.rows * 2 - 1) * this.aspect;
+        for (let c = 0; c < this.cols; c++) {
+          const nx = (c + 0.5) / this.cols * 2 - 1;
+          const d = field(nx, ny, t);
+          if (d < 0.06) continue;                    // skip near-empty -> clean white + speed
+          cells.push({
+            d,
+            ny,
+            x: c * this.cellW,
+            y: r * this.cellH,
+            glyph: RAMP[Math.min(RAMP.length - 1, d * RAMP.length | 0)],
+          });
+        }
+      }
+
+      if (!cells.length) return;
+
+      this.ctx.save();
+      this.ctx.globalAlpha = this.mode === "jelly" ? 0.58 : 0.48;
+      this.ctx.shadowColor = glowFor(this.mode);
+      this.ctx.shadowBlur = this.mode === "jelly" ? 16 : 12;
+      this.ctx.fillStyle = glowFor(this.mode);
+      for (const cell of cells) {
+        this.ctx.fillText(cell.glyph, cell.x, cell.y);
+      }
+      this.ctx.restore();
+
+      this.ctx.save();
+      this.ctx.globalAlpha = 1;
+      this.ctx.shadowBlur = 0;
+      for (const cell of cells) {
+        this.ctx.fillStyle = colorFor(cell.d, cell.ny, t, this.mode);
+        this.ctx.fillText(cell.glyph, cell.x, cell.y);
+      }
+      this.ctx.restore();
     }
   }
 
-  class Fish extends Entity {
-    constructor(opts) {
-      super(opts);
-      this.turnBias = rand(0.002, 0.009);
-      this.wiggle = rand(0, Math.PI * 2);
-      this.baseSpeed = rand(0.6, 1.4);
+  class Creature {
+    constructor(spec, initial = true) {
+      this.spec = spec;
+      this.el = document.createElement("canvas");
+      this.el.className = `entity creature creature-${spec.mode}`;
+      this.el.dataset.creature = spec.mode;
+      this.el.setAttribute("aria-hidden", "true");
+      layer.appendChild(this.el);
+
+      this.renderer = new AsciiRenderer(this.el, spec.mode);
+      this.reset(initial);
     }
 
-    step() {
-      // random gentle turning
-      this.vx += rand(-drift, drift);
-      this.vy += rand(-drift, drift);
-
-      // slight sinusoidal vertical wiggle
-      this.wiggle += rand(0.02, 0.04);
-      this.vy += Math.sin(this.wiggle) * this.turnBias;
-
-      // cursor repulsion
-      const dx = this.x - pointer.x;
-      const dy = this.y - pointer.y;
-      const dist = Math.hypot(dx, dy) || 0.0001;
-
-      if (dist < repelRadius) {
-        const force = (1 - dist / repelRadius) * repelStrength;
-        this.vx += (dx / dist) * force;
-        this.vy += (dy / dist) * force;
-      }
-
-      // keep fish generally moving forward (avoid near-zero velocity)
-      const speed = Math.hypot(this.vx, this.vy);
-      if (speed < 0.2) {
-        const a = rand(0, Math.PI * 2);
-        this.vx += Math.cos(a) * 0.3;
-        this.vy += Math.sin(a) * 0.3;
-      }
-
-      // cap speed
-      const s = Math.hypot(this.vx, this.vy);
-      if (s > maxSpeed) {
-        this.vx = (this.vx / s) * maxSpeed;
-        this.vy = (this.vy / s) * maxSpeed;
-      }
-
-      // apply damping
-      this.vx *= damping;
-      this.vy *= damping;
-
-      // move
-      this.x += this.vx * this.baseSpeed;
-      this.y += this.vy * this.baseSpeed;
-
-      // soft boundary bounce
-      const margin = 20;
-      if (this.x < margin) this.vx += 0.25;
-      if (this.x > W - margin) this.vx -= 0.25;
-      if (this.y < margin + 60) this.vy += 0.18; // keep away from HUD top
-      if (this.y > H - margin - 120) this.vy -= 0.18; // keep above sand
-
-      this.x = clamp(this.x, 0, W);
-      this.y = clamp(this.y, 0, H);
-
-      // render flipped based on direction
-      const flip = this.vx >= 0 ? 1 : -1;
-      this.render(flip);
-    }
-  }
-
-  class Bubble extends Entity {
-    constructor(opts) {
-      super(opts);
-      this.rise = rand(0.4, 1.2);
-      this.sway = rand(0.002, 0.01);
+    reset(initial) {
+      const { spec } = this;
+      this.mode = spec.mode;
+      this.width = rand(spec.width[0], spec.width[1]);
+      this.height = this.width * spec.aspect;
+      this.speed = rand(spec.speed[0], spec.speed[1]);
+      this.opacity = rand(spec.opacity[0], spec.opacity[1]);
+      this.blur = rand(spec.blur[0], spec.blur[1]);
+      this.direction = rng() > 0.5 ? 1 : -1;
+      this.baseY = rand(H * spec.yMin, H * spec.yMax);
+      this.sway = rand(spec.sway[0], spec.sway[1]);
       this.phase = rand(0, Math.PI * 2);
-      this.opacity = rand(0.35, 0.85);
-      this.el.style.opacity = this.opacity.toFixed(2);
+      this.phaseSpeed = rand(0.26, 0.62);
+      this.current = rand(2, 7);
+      this.localTime = rand(0, 20);
+      this.el.style.zIndex = spec.z;
+      setCreatureVars(this.el, this.width, this.height, this.opacity, this.blur);
+      this.renderer.resize();
+
+      const pad = this.width * 1.2;
+      this.x = initial ? rand(-pad, W + pad) : (this.direction > 0 ? -pad : W + pad);
+      this.y = this.baseY;
+      this.render();
     }
 
-    step() {
-      this.phase += 0.03;
-      this.x += Math.sin(this.phase) * (this.sway * 50);
-      this.y -= this.rise;
+    rescale(xScale, yScale) {
+      this.x *= xScale;
+      this.baseY *= yScale;
+      this.y *= yScale;
+      this.renderer.resize();
+      this.render();
+    }
 
-      // slight cursor repulsion for bubbles too (subtle)
-      const dx = this.x - pointer.x;
-      const dy = this.y - pointer.y;
-      const dist = Math.hypot(dx, dy) || 0.0001;
-      if (dist < repelRadius * 0.85) {
-        const force = (1 - dist / (repelRadius * 0.85)) * 0.25;
-        this.x += (dx / dist) * force * 2;
-        this.y += (dy / dist) * force * 1;
+    step(dt) {
+      this.phase += dt * this.phaseSpeed;
+      this.localTime += dt;
+      this.x += this.direction * this.speed * dt;
+      this.y = this.baseY
+        + Math.sin(this.phase) * this.sway
+        + Math.sin((this.x * 0.006) + this.phase) * this.current;
+
+      const pad = this.width * 1.3;
+      if ((this.direction > 0 && this.x > W + pad) || (this.direction < 0 && this.x < -pad)) {
+        this.reset(false);
       }
 
-      // respawn at bottom when off top
-      if (this.y < -60) {
-        this.y = H + rand(40, 220);
-        this.x = rand(0, W);
-        this.rise = rand(0.4, 1.2);
-        this.opacity = rand(0.35, 0.85);
-        this.el.style.opacity = this.opacity.toFixed(2);
-      }
+      this.render();
+    }
 
-      this.render(1);
+    render() {
+      const flip = this.direction < 0 ? 1 : -1;
+      this.el.style.transform = `translate3d(${this.x - this.width / 2}px, ${this.y - this.height / 2}px, 0) scaleX(${flip})`;
+      this.renderer.render(this.localTime);
     }
   }
 
-  const fishes = [];
-  const bubbles = [];
+  class Bubble {
+    constructor(initial = true) {
+      this.el = document.createElement("div");
+      this.el.className = "entity bubble";
+      this.el.setAttribute("aria-hidden", "true");
+      layer.appendChild(this.el);
+      this.reset(initial);
+    }
 
-  function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+    reset(initial) {
+      this.size = rand(7, 24);
+      this.opacity = rand(0.16, 0.5);
+      this.blur = rand(0, 0.9);
+      this.baseX = rand(W * 0.04, W * 0.96);
+      this.y = initial ? rand(-H * 0.1, H * 1.08) : H + rand(20, 180);
+      this.rise = rand(12, 38);
+      this.sway = rand(8, 28);
+      this.phase = rand(0, Math.PI * 2);
+      this.phaseSpeed = rand(0.45, 0.9);
+      this.el.style.zIndex = Math.round(rand(1, 6));
+      setBubbleVars(this.el, this.size, this.opacity, this.blur);
+      this.render();
+    }
+
+    rescale(xScale, yScale) {
+      this.baseX *= xScale;
+      this.y *= yScale;
+      this.render();
+    }
+
+    step(dt) {
+      this.phase += dt * this.phaseSpeed;
+      this.y -= this.rise * dt;
+
+      if (this.y < -this.size * 3) {
+        this.reset(false);
+      }
+
+      this.render();
+    }
+
+    render() {
+      const x = this.baseX + Math.sin(this.phase) * this.sway;
+      this.el.style.transform = `translate3d(${x - this.size / 2}px, ${this.y - this.size / 2}px, 0)`;
+    }
+  }
 
   function spawn() {
-    // fish
-    for (let i = 0; i < FISH_COUNT; i++) {
-      const size = rand(26, 52);
-      fishes.push(new Fish({
-        emoji: pick(fishEmojis),
-        className: "fish",
-        x: rand(0, W),
-        y: rand(80, H - 180),
-        vx: rand(-1, 1),
-        vy: rand(-0.6, 0.6),
-        size
-      }));
+    rng = mulberry32(SCENE.seed);
+    layer.replaceChildren();
+    entities.length = 0;
+
+    for (const spec of SCENE.creatures) {
+      for (let i = 0; i < spec.count; i += 1) {
+        entities.push(new Creature(spec));
+      }
     }
 
-    // bubbles
-    for (let i = 0; i < BUBBLE_COUNT; i++) {
-      const size = rand(14, 30);
-      bubbles.push(new Bubble({
-        emoji: pick(bubbleEmojis),
-        className: "bubble",
-        x: rand(0, W),
-        y: rand(0, H),
-        vx: 0,
-        vy: 0,
-        size
-      }));
+    for (let i = 0; i < SCENE.bubbleCount; i += 1) {
+      entities.push(new Bubble());
     }
   }
 
-  function onResize() {
-    W = window.innerWidth;
-    H = window.innerHeight;
+  function resize() {
+    const previousW = W;
+    const previousH = H;
+    W = Math.max(window.innerWidth, 1);
+    H = Math.max(window.innerHeight, 1);
+
+    const xScale = W / previousW;
+    const yScale = H / previousH;
+    for (const entity of entities) entity.rescale(xScale, yScale);
   }
 
-  function setPointerTarget(x, y) {
-    pointerTarget.x = x;
-    pointerTarget.y = y;
+  let raf = 0;
+  let running = false;
+  let lastTime = 0;
+
+  function tick(now) {
+    if (!running) return;
+
+    const dt = Math.min((now - lastTime) / 1000 || 0, 0.05);
+    lastTime = now;
+
+    for (const entity of entities) entity.step(dt);
+    raf = requestAnimationFrame(tick);
   }
 
-  window.addEventListener("resize", onResize, { passive: true });
-
-  window.addEventListener("mousemove", (e) => {
-    setPointerTarget(e.clientX, e.clientY);
-  }, { passive: true });
-
-  window.addEventListener("touchstart", (e) => {
-    if (!e.touches?.length) return;
-    const t = e.touches[0];
-    setPointerTarget(t.clientX, t.clientY);
-  }, { passive: true });
-
-  window.addEventListener("touchmove", (e) => {
-    if (!e.touches?.length) return;
-    const t = e.touches[0];
-    setPointerTarget(t.clientX, t.clientY);
-  }, { passive: true });
-
-  // If the pointer leaves, drift back toward center slowly
-  window.addEventListener("mouseleave", () => {
-    setPointerTarget(W * 0.5, H * 0.5);
-  }, { passive: true });
-
-  function animate() {
-    // smooth pointer
-    pointer.x += (pointerTarget.x - pointer.x) * cursorFollow;
-    pointer.y += (pointerTarget.y - pointer.y) * cursorFollow;
-
-    // step entities
-    for (const b of bubbles) b.step();
-    for (const f of fishes) f.step();
-
-    requestAnimationFrame(animate);
+  function start() {
+    if (running || reduceMotion) return;
+    running = true;
+    lastTime = performance.now();
+    raf = requestAnimationFrame(tick);
   }
+
+  function stop() {
+    running = false;
+    cancelAnimationFrame(raf);
+  }
+
+  window.addEventListener("resize", resize, { passive: true });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stop();
+    else start();
+  });
 
   spawn();
-  animate();
+  if (!reduceMotion) start();
 })();
