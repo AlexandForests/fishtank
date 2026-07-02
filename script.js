@@ -67,17 +67,31 @@
     return clamp(d * tex, 0, 1);
   }
 
-  // RAY - additive third field, using the same density contract as fish/jelly.
+  // RAY - rounded head/body + a wing swept back to a point + a whip tail. Same density contract as fish/jelly.
   function rayField(x, y, t) {
-    const flap = Math.sin(t * 2.1 + Math.abs(x) * 3.0) * 0.075 * clamp(1.0 - Math.abs(x) / 0.96, 0, 1);
-    const yw = y - flap;
-    const wingThickness = 0.05 + 0.27 * clamp(1.0 - Math.abs(x) / 0.96, 0, 1);
-    const wings = 1.0 - Math.max(Math.abs(x) / 0.96, Math.abs(yw) / wingThickness);
-    const head = 1.0 - (((x + 0.36) / 0.30) * ((x + 0.36) / 0.30) + (yw / 0.20) * (yw / 0.20));
-    const tailWave = Math.sin(x * 10.0 + t * 2.8) * 0.018;
-    const tail = (x > 0.20) ? smoothstep(0.035, 0.0, Math.abs(yw - tailWave)) * clamp(1.0 - (x - 0.20) / 0.78, 0, 1) : 0;
-    let d = smoothstep(0.0, 0.24, Math.max(Math.max(wings, head), tail * 0.7));
+    const bx = (x + 0.35) / 0.30, by = y / 0.13;
+    const body = 1.0 - (bx*bx + by*by);
+
+    let wing = -1;
+    if (y >= 0 && y <= 0.46) {
+      const v = y / 0.46;
+      const wcx = -0.05 + 0.35 * v;
+      const halfChord = Math.max(1e-4, 0.42 * Math.pow(1 - v, 1.3));
+      wing = 1.0 - Math.abs(x - wcx) / halfChord;
+    }
+
+    let tail = -1;
+    if (x >= 0.22 && x <= 0.90) {
+      const u = (x - 0.22) / 0.68;
+      const yc = 0.05 * Math.sin(6 * u + 0.5);
+      const h = 0.09 - 0.05 * u;
+      tail = smoothstep(h, 0, Math.abs(y - yc));
+    }
+
+    let d = smoothstep(0.0, 0.24, Math.max(Math.max(body, wing), tail * 0.9));
     if (d <= 0) return 0;
+    const ex = x + 0.58, ey = y + 0.02;
+    if (ex*ex + ey*ey < 0.0035) d = 0;
     const tex = 0.48 + 0.55 * vnoise(x*6 - t*0.35, y*6 + t*0.25);
     return clamp(d * tex, 0, 1);
   }
