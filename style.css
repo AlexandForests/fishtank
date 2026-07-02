@@ -118,10 +118,10 @@ body {
     drop-shadow(0 0 26px rgba(186, 198, 255, 0.26));
 }
 
-.creature-ray {
+.creature-shark {
   filter:
     drop-shadow(0 10px 20px rgba(0, 0, 0, 0.28))
-    drop-shadow(0 0 22px rgba(126, 244, 231, 0.22));
+    drop-shadow(0 0 22px rgba(168, 205, 235, 0.22));
 }
 
 .bubble {

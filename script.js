@@ -11,7 +11,7 @@
       { mode: "fish", count: 4, yMin: 0.14, yMax: 0.62, width: [138, 190], speed: [9, 20], opacity: [0.42, 0.62], blur: [0, 0], sway: [8, 20], z: 2, aspect: 0.58 },
       { mode: "fish", count: 3, yMin: 0.26, yMax: 0.82, width: [190, 260], speed: [15, 28], opacity: [0.62, 0.86], blur: [0, 0], sway: [12, 28], z: 5, aspect: 0.58 },
       { mode: "jelly", count: 4, yMin: 0.16, yMax: 0.72, width: [118, 168], speed: [5, 13], opacity: [0.52, 0.78], blur: [0, 0], sway: [16, 34], z: 4, aspect: 1.18 },
-      { mode: "ray", count: 3, yMin: 0.34, yMax: 0.86, width: [170, 250], speed: [10, 23], opacity: [0.52, 0.78], blur: [0, 0], sway: [10, 24], z: 3, aspect: 0.66 },
+      { mode: "shark", count: 3, yMin: 0.30, yMax: 0.84, width: [190, 270], speed: [14, 27], opacity: [0.55, 0.80], blur: [0, 0], sway: [10, 22], z: 3, aspect: 0.52 },
     ],
     bubbleCount: 34,
   });
@@ -67,39 +67,54 @@
     return clamp(d * tex, 0, 1);
   }
 
-  // RAY - rounded head/body + a wing that beats through the body + a traveling whip-tail wave.
-  function rayField(x, y, t) {
-    const omega = 2.4;                                  // wingbeat clock, ~0.38 Hz
-    const pitch = 0.03 * Math.sin(omega * t - 2.6) * (x + 0.35); // subtle body rock, reacting to the stroke
-    const yp = y + pitch;
+  // SHARK - torpedo body warped by a traveling swim wave (stiff head, mobile tail),
+  // dorsal + pectoral fins, and a two-lobed crescent caudal fin. Same density contract.
+  function sharkField(x, y, t) {
+    const amp = 0.03 + 0.10 * smoothstep(-0.3, 0.9, x);  // wave grows toward the tail
+    const yw = y - amp * Math.sin(2.6 * x - 3.4 * t);
 
-    const bx = (x + 0.35) / 0.30, by = yp / 0.13;
-    const body = 1.0 - (bx*bx + by*by);
-
-    let wing = -1;
-    const yTip = 0.50 * Math.sin(omega * t);            // sweeps through the body: +above, -below
-    if (Math.abs(yTip) > 0.02 && Math.sign(yp) === Math.sign(yTip) && Math.abs(yp) <= Math.abs(yTip)) {
-      const v = yp / yTip;
-      const bow = 0.12 * Math.sin(omega * t - 1.1);      // phase-lagged follow-through bend
-      const wcx = -0.05 + (0.35 + bow) * v;
-      const halfChord = Math.max(1e-4, 0.42 * Math.pow(1 - v, 1.3));
-      wing = 1.0 - Math.abs(x - wcx) / halfChord;
+    let body = -1;
+    if (x >= -0.95 && x <= 0.66) {
+      const front = Math.pow(clamp((x + 0.95) / 0.6, 0, 1), 0.55); // pointed snout
+      const rear = 1.0 - 0.85 * smoothstep(-0.3, 0.58, x);         // narrow caudal peduncle
+      const th = Math.max(0.045, 0.17 * front * rear);             // floor keeps the peduncle >= one cell
+      body = 1.0 - (yw / th) * (yw / th);
     }
 
-    let tail = -1;
-    if (x >= 0.22 && x <= 0.90) {
-      const u = (x - 0.22) / 0.68;
-      const amp = 0.03 + 0.09 * u;                        // amplitude grows toward the tip
-      const yc = amp * Math.sin(6 * u - 3.2 * t + 0.5);   // traveling wave, body -> tip
-      const h = 0.09 - 0.05 * u;
-      tail = smoothstep(h, 0, Math.abs(yp - yc));
+    let dorsal = -1;
+    if (yw <= 0 && yw >= -0.44) {
+      const v = -yw / 0.44;
+      const cx = -0.20 + 0.17 * v;                       // swept back toward the tail
+      const halfChord = Math.max(1e-4, 0.15 * Math.pow(1 - v, 1.25));
+      dorsal = 1.0 - Math.abs(x - cx) / halfChord;
     }
 
-    let d = smoothstep(0.0, 0.24, Math.max(Math.max(body, wing), tail * 0.9));
+    let pect = -1;
+    if (yw >= 0 && yw <= 0.22) {
+      const v = yw / 0.22;
+      const cx = -0.42 + 0.16 * v;
+      const halfChord = Math.max(1e-4, 0.10 * Math.pow(1 - v, 1.1));
+      pect = 1.0 - Math.abs(x - cx) / halfChord;
+    }
+
+    let caudal = -1;
+    if (yw <= 0 && yw >= -0.36) {                        // upper lobe, larger (heterocercal)
+      const v = -yw / 0.36;
+      const cx = 0.60 + 0.30 * v;
+      const halfChord = Math.max(1e-4, 0.10 * Math.pow(1 - v, 0.8) + 0.015);
+      caudal = 1.0 - Math.abs(x - cx) / halfChord;
+    } else if (yw > 0 && yw <= 0.24) {                   // lower lobe, smaller
+      const v = yw / 0.24;
+      const cx = 0.60 + 0.24 * v;
+      const halfChord = Math.max(1e-4, 0.085 * Math.pow(1 - v, 0.8) + 0.012);
+      caudal = 1.0 - Math.abs(x - cx) / halfChord;
+    }
+
+    let d = smoothstep(0.0, 0.26, Math.max(Math.max(body, dorsal), Math.max(pect, caudal)));
     if (d <= 0) return 0;
-    const ex = x + 0.58, ey = yp + 0.02;
-    if (ex*ex + ey*ey < 0.0035) d = 0;
-    const tex = 0.48 + 0.55 * vnoise(x*6 - t*0.35, y*6 + t*0.25);
+    const ex = x + 0.74, ey = yw + 0.03;
+    if (ex*ex + ey*ey < 0.0022) d = 0;
+    const tex = 0.5 + 0.5 * vnoise(x*6 - t*0.3, y*6 + t*0.25);
     return clamp(d * tex, 0, 1);
   }
 
@@ -108,7 +123,7 @@
   const PALETTES = Object.freeze({
     fish: { hue: 188, swing: 16, sat: 72, light: 62, glow: "rgba(93, 230, 255, 0.7)" },
     jelly: { hue: 252, swing: 22, sat: 76, light: 66, glow: "rgba(176, 156, 255, 0.72)" },
-    ray: { hue: 166, swing: 18, sat: 68, light: 58, glow: "rgba(92, 255, 218, 0.64)" },
+    shark: { hue: 207, swing: 12, sat: 34, light: 62, glow: "rgba(168, 205, 235, 0.6)" },
   });
 
   function colorFor(d, ny, t, mode) {
@@ -126,7 +141,7 @@
   const FIELD_BY_MODE = Object.freeze({
     fish: fishField,
     jelly: jellyField,
-    ray: rayField,
+    shark: sharkField,
   });
 
   let W = Math.max(window.innerWidth, 1);
