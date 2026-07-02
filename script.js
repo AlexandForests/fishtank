@@ -380,6 +380,13 @@
     W = Math.max(window.innerWidth, 1);
     H = Math.max(window.innerHeight, 1);
 
+    // Rescaling from a degenerate previous size would multiply every position by a huge
+    // factor (the same failure mode the boot gate below guards against). Respawn instead.
+    if (previousW < MIN_VIEWPORT || previousH < MIN_VIEWPORT) {
+      spawn();
+      return;
+    }
+
     const xScale = W / previousW;
     const yScale = H / previousH;
     for (const entity of entities) entity.rescale(xScale, yScale);
