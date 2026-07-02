@@ -67,15 +67,21 @@
     return clamp(d * tex, 0, 1);
   }
 
-  // RAY - rounded head/body + a wing swept back to a point + a whip tail. Same density contract as fish/jelly.
+  // RAY - rounded head/body + a wing that beats through the body + a traveling whip-tail wave.
   function rayField(x, y, t) {
-    const bx = (x + 0.35) / 0.30, by = y / 0.13;
+    const omega = 2.4;                                  // wingbeat clock, ~0.38 Hz
+    const pitch = 0.03 * Math.sin(omega * t - 2.6) * (x + 0.35); // subtle body rock, reacting to the stroke
+    const yp = y + pitch;
+
+    const bx = (x + 0.35) / 0.30, by = yp / 0.13;
     const body = 1.0 - (bx*bx + by*by);
 
     let wing = -1;
-    if (y >= 0 && y <= 0.46) {
-      const v = y / 0.46;
-      const wcx = -0.05 + 0.35 * v;
+    const yTip = 0.50 * Math.sin(omega * t);            // sweeps through the body: +above, -below
+    if (Math.abs(yTip) > 0.02 && Math.sign(yp) === Math.sign(yTip) && Math.abs(yp) <= Math.abs(yTip)) {
+      const v = yp / yTip;
+      const bow = 0.12 * Math.sin(omega * t - 1.1);      // phase-lagged follow-through bend
+      const wcx = -0.05 + (0.35 + bow) * v;
       const halfChord = Math.max(1e-4, 0.42 * Math.pow(1 - v, 1.3));
       wing = 1.0 - Math.abs(x - wcx) / halfChord;
     }
@@ -83,14 +89,15 @@
     let tail = -1;
     if (x >= 0.22 && x <= 0.90) {
       const u = (x - 0.22) / 0.68;
-      const yc = 0.05 * Math.sin(6 * u + 0.5);
+      const amp = 0.03 + 0.09 * u;                        // amplitude grows toward the tip
+      const yc = amp * Math.sin(6 * u - 3.2 * t + 0.5);   // traveling wave, body -> tip
       const h = 0.09 - 0.05 * u;
-      tail = smoothstep(h, 0, Math.abs(y - yc));
+      tail = smoothstep(h, 0, Math.abs(yp - yc));
     }
 
     let d = smoothstep(0.0, 0.24, Math.max(Math.max(body, wing), tail * 0.9));
     if (d <= 0) return 0;
-    const ex = x + 0.58, ey = y + 0.02;
+    const ex = x + 0.58, ey = yp + 0.02;
     if (ex*ex + ey*ey < 0.0035) d = 0;
     const tex = 0.48 + 0.55 * vnoise(x*6 - t*0.35, y*6 + t*0.25);
     return clamp(d * tex, 0, 1);
